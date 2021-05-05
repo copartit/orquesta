@@ -691,6 +691,7 @@ class WorkflowConductor(object):
         # task rendering, then log the error and continue. This allows user to know about
         # all task rendering errors for this task transition instead of getting rendering
         # error one at a time during runtime.
+        LOG.info("remediation_tasks = {} staged_tasks = {}".format(len(remediation_tasks), len(staged_tasks)))
         for staged_task in remediation_tasks or staged_tasks:
             try:
                 next_task = self.get_task(staged_task["id"], staged_task["route"])
@@ -819,6 +820,7 @@ class WorkflowConductor(object):
         return task_state_entry
 
     def update_task_state(self, task_id, route, event):
+        LOG.info("update_task_state called")
         engine_event_queue = queue.Queue()
 
         # Throw exception if not expected event type.
@@ -874,6 +876,7 @@ class WorkflowConductor(object):
 
         # Remove task from staging if task is not with items.
         if event.status and staged_task and "items" not in staged_task:
+            LOG.info("Removing(2) staged task_id={} route={}".format(task_id, route))
             self.workflow_state.remove_staged_task(task_id, route)
 
         # If action execution is for a task item, then record the execution status for the item.
@@ -890,6 +893,8 @@ class WorkflowConductor(object):
         # Process the action execution event using the
         # task state machine and update the task status.
         old_task_status = task_state_entry.get("status", statuses.UNSET)
+        # bug here?
+        LOG.info("Passing workflow_state={}, task_state_entry={}, event={} to TaskStateMachine".format(self.workflow_state, task_state_entry, event))
         machines.TaskStateMachine.process_event(self.workflow_state, task_state_entry, event)
         new_task_status = task_state_entry.get("status", statuses.UNSET)
 
@@ -899,6 +904,7 @@ class WorkflowConductor(object):
             task_state_entry["retry"]["tally"] += 1
 
             # Reset the staged task to be returned in get_next_tasks
+            LOG.info("Removing(3) staged task_id={} route={}".format(task_id, route))
             self.workflow_state.remove_staged_task(task_id, route)
 
             self.workflow_state.add_staged_task(
@@ -915,6 +921,7 @@ class WorkflowConductor(object):
             # Remove task from staging if exists but keep and flag entry
             # if task has items and failed for manual rerun.
             if not (task_spec.has_items() and new_task_status in statuses.ABENDED_STATUSES):
+                LOG.info("Removing(1) staged task_id={} route={}".format(task_id, route))
                 self.workflow_state.remove_staged_task(task_id, route)
             else:
                 staged_task = self.workflow_state.get_staged_task(task_id, route)
@@ -935,6 +942,7 @@ class WorkflowConductor(object):
             ):
                 return self.update_task_state(task_id, route, events.TaskRetryEvent())
 
+        LOG.info("new_task_status={} old_task_status={}".format(new_task_status, old_task_status))
         # Evaluate task transitions if task is completed and status change is not processed.
         if new_task_status in statuses.COMPLETED_STATUSES and new_task_status != old_task_status:
             has_manual_fail = False
@@ -965,10 +973,12 @@ class WorkflowConductor(object):
                     self.request_workflow_status(statuses.FAILED)
                     continue
 
+                LOG.info("task_state_entry={}".format(task_state_entry))
                 # If criteria met, then mark the next task staged and calculate outgoing context.
                 if task_state_entry["next"][task_transition_id]:
                     next_task_node = self.graph.get_task(task_transition[1])
                     next_task_id = next_task_node["id"]
+                    LOG.info("next_task_node={}".format(next_task_node))
                     new_ctx_idx = None
 
                     # Get and process new context for the task transition.
@@ -998,7 +1008,7 @@ class WorkflowConductor(object):
 
                     # Stage the next task if it is not in staging.
                     next_task_route = self._evaluate_route(task_transition, route)
-
+                    LOG.info("Next task id={} route={}".format(next_task_id, next_task_route))
                     staged_next_task = self.workflow_state.get_staged_task(
                         next_task_id, next_task_route
                     )
@@ -1024,6 +1034,7 @@ class WorkflowConductor(object):
                         staged_next_task.pop("completed", None)
                     else:
                         # Otherwise create a new entry in staging for the next task.
+                        LOG.info("Adding staged task id={} route={}".format(next_task_id,next_task_route))
                         staged_next_task = self.workflow_state.add_staged_task(
                             next_task_id,
                             next_task_route,
